@@ -1,0 +1,274 @@
+---
+title: "POST /nl2dsl — Natural Language to DSL Endpoint"
+sidebarTitle: "POST /nl2dsl"
+description: "POST /nl2dsl converts natural language to semantic and executable DSL. Accepts text, project_id, and optional session_id for multi-turn sessions."
+---
+
+The `POST /nl2dsl` endpoint is the core of Query Agent. Send it a plain-language question and it returns a structured semantic DSL, an executable query payload, and a full resolver explanation. Include a `session_id` from a previous response to send follow-up queries that patch the previous state rather than rebuilding from scratch.
+
+## Request
+
+**`POST /nl2dsl`**
+
+### Request body
+
+<ParamField body="text" type="string" required>
+  The natural language query text. This is your plain-English question about data.
+
+  Example: `"Show PV for app_launch in Germany over the last 7 days"`
+</ParamField>
+
+<ParamField body="project_id" type="integer" default="55">
+  The project to query. Scopes the metadata catalog used for event, metric, and dimension resolution, and the project memory injected into the LLM context.
+</ParamField>
+
+<ParamField body="session_id" type="string">
+  Session identifier from a previous `/nl2dsl` response. Include this to send follow-up queries that patch the previous query state instead of starting fresh. Omit to create a new session.
+</ParamField>
+
+<ParamField body="user_id" type="string">
+  Optional user identifier. Scopes user preference signals — event, metric, and group_by usage counts — to this user within the project. If omitted, user preference reranking is not applied.
+</ParamField>
+
+<ParamField body="chat_id" type="string">
+  Optional Telegram chat identifier. Used by the Telegram gateway for reply routing. You can omit this when calling the HTTP API directly.
+</ParamField>
+
+### Example requests
+
+<Tabs>
+  <Tab title="curl">
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Show PV for app_launch in Germany over the last 7 days",
+        "project_id": 55
+      }'
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    import httpx
+
+    response = httpx.post(
+        "http://localhost:8000/nl2dsl",
+        json={
+            "text": "Show PV for app_launch in Germany over the last 7 days",
+            "project_id": 55,
+        },
+    )
+    data = response.json()
+    ```
+  </Tab>
+  <Tab title="Follow-up">
+    ```bash
+    # Use session_id from a previous response to patch the prior query state
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Change it to UV",
+        "project_id": 55,
+        "session_id": "sess-abc-123"
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Response
+
+<ResponseField name="status" type="string">
+  Query resolution status. One of `success`, `early_exit`, or `needs_confirmation`. See [Status values](#status-values) below.
+</ResponseField>
+
+<ResponseField name="session_id" type="string | null">
+  The session identifier for this conversation turn. Pass this value as `session_id` in your next request to continue as a follow-up query.
+</ResponseField>
+
+<ResponseField name="semantic" type="object">
+  The normalized semantic DSL — a structured, canonical representation of what the agent understood from your query.
+
+  <Expandable title="semantic fields">
+    <ResponseField name="event" type="string">
+      Resolved canonical event name (e.g. `"app_launch"`).
+    </ResponseField>
+    <ResponseField name="metric" type="string">
+      Resolved metric (e.g. `"pv"` or `"uv"`).
+    </ResponseField>
+    <ResponseField name="time_range" type="object">
+      Normalized time window. Contains a `type` field and type-specific parameters, for example `{"type": "last_n_days", "n": 7}`.
+    </ResponseField>
+    <ResponseField name="region_filter" type="array">
+      List of resolved region codes applied to the query (e.g. `["DE"]`).
+    </ResponseField>
+    <ResponseField name="group_by" type="array">
+      List of resolved dimension names to group results by (e.g. `["country"]`).
+    </ResponseField>
+    <ResponseField name="filters" type="array">
+      Any additional resolved filters beyond region.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="exec_dsl" type="object">
+  The executable DSL payload formatted for your downstream query system. Pass this directly to `POST /query/bearer` to execute the query.
+</ResponseField>
+
+<ResponseField name="explain" type="object">
+  Rich debug and resolver information produced during this turn.
+
+  <Expandable title="explain fields">
+    <ResponseField name="turn_mode" type="string">
+      Turn classification: `new_query`, `followup_patch`, or `confirmation`.
+    </ResponseField>
+    <ResponseField name="resolver_explain" type="object">
+      Per-field resolution details — resolved value, confidence score, and source (`explicit` or `inherited`) for each field.
+    </ResponseField>
+    <ResponseField name="candidate_scores" type="object">
+      Scored candidate lists produced by the matcher for each resolved field.
+    </ResponseField>
+    <ResponseField name="timing" type="object">
+      Wall-clock timing for major pipeline stages (LLM extraction, matching, DSL rendering).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="extraction_json" type="object">
+  The raw structured output from the LLM extraction stage, before matcher resolution is applied. Useful for debugging unexpected resolutions.
+</ResponseField>
+
+<ResponseField name="task_id" type="string | null">
+  Set when `status=needs_confirmation`. The pending task ID. Include the `session_id` in your next request to resume this task once the user selects a candidate.
+</ResponseField>
+
+<ResponseField name="candidates" type="object | null">
+  Set when `status=needs_confirmation`. A map of field names to candidate arrays. Each candidate has a `value` and a `score`.
+</ResponseField>
+
+<ResponseField name="message" type="string | null">
+  Human-readable status detail. Always present when `status=early_exit` or `status=needs_confirmation`.
+</ResponseField>
+
+## Status values
+
+The `status` field tells you whether the query resolved cleanly, needs more information, or cannot proceed.
+
+| Status | Meaning |
+|---|---|
+| `success` | The query resolved fully. `semantic` and `exec_dsl` are populated and ready to use. |
+| `early_exit` | Required information is missing — for example, the agent could not identify any event. Check `message` for detail. |
+| `needs_confirmation` | The agent found low-confidence candidates and needs the user to select one. Check `candidates` and reply with the user's choice in the next turn. |
+
+<Note>
+  When you receive `needs_confirmation`, store the `session_id` and surface the `candidates` list to your user. Send their selection (e.g. `"1"`) as the `text` of the next request with the same `session_id`. The agent will restore the pending task, apply the confirmed value, and complete DSL generation.
+</Note>
+
+## Response examples
+
+<Tabs>
+  <Tab title="Success">
+    ```json
+    {
+      "status": "success",
+      "session_id": "sess-abc-123",
+      "semantic": {
+        "event": "app_launch",
+        "metric": "pv",
+        "time_range": { "type": "last_n_days", "n": 7 },
+        "region_filter": ["DE"],
+        "group_by": [],
+        "filters": []
+      },
+      "exec_dsl": {
+        "event": "app_launch",
+        "metric": "pv",
+        "date_range": { "days": 7 },
+        "filters": { "region": ["DE"] }
+      },
+      "explain": {
+        "turn_mode": "new_query",
+        "resolver_explain": {
+          "event": { "resolved": "app_launch", "score": 95.0, "source": "explicit" },
+          "metric": { "resolved": "pv", "score": 98.0, "source": "explicit" }
+        },
+        "candidate_scores": {},
+        "timing": { "llm_extraction_ms": 420, "matching_ms": 18, "render_ms": 3 }
+      },
+      "extraction_json": { "event_extractions": ["app_launch"], "metric": "pv" },
+      "task_id": null,
+      "candidates": null,
+      "message": null
+    }
+    ```
+  </Tab>
+  <Tab title="Needs Confirmation">
+    ```json
+    {
+      "status": "needs_confirmation",
+      "session_id": "sess-abc-123",
+      "task_id": "task-xyz-789",
+      "candidates": {
+        "event": [
+          { "value": "app_launch", "score": 72.0 },
+          { "value": "app_cold_start_success", "score": 69.0 }
+        ]
+      },
+      "message": "Please confirm the event. Reply with 1 or 2.",
+      "semantic": {},
+      "exec_dsl": {},
+      "explain": {},
+      "extraction_json": {}
+    }
+    ```
+  </Tab>
+  <Tab title="Early Exit">
+    ```json
+    {
+      "status": "early_exit",
+      "session_id": "sess-abc-123",
+      "message": "Could not resolve an event from the query text.",
+      "semantic": {},
+      "exec_dsl": {},
+      "explain": {},
+      "extraction_json": {},
+      "task_id": null,
+      "candidates": null
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-turn session flow
+
+Query Agent tracks query state across turns. Each turn inherits unmodified fields from the previous `last_query_state`, so your users can refine a query incrementally without restating every field.
+
+<Steps>
+  <Step title="Send an initial query">
+    Omit `session_id` to start a new session. The response includes a `session_id` you use for all subsequent turns.
+
+    ```json
+    POST /nl2dsl
+    { "text": "Show PV for app_launch in Germany", "project_id": 55 }
+    ```
+  </Step>
+  <Step title="Send a follow-up">
+    Include the `session_id` from step 1. The agent detects `followup_patch` turn mode, keeps inherited fields (event, region, time range), and applies only the changed field.
+
+    ```json
+    POST /nl2dsl
+    { "text": "Change it to UV", "project_id": 55, "session_id": "sess-abc-123" }
+    ```
+  </Step>
+  <Step title="Confirm an ambiguous event (if needed)">
+    If a previous turn returned `needs_confirmation`, send the user's selection as plain text with the same `session_id`. The agent restores the pending task, applies the confirmed value, and returns `status=success`.
+
+    ```json
+    POST /nl2dsl
+    { "text": "1", "project_id": 55, "session_id": "sess-abc-123" }
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Use `GET /sessions/{session_id}` to inspect the `last_query_state` that will be inherited on the next turn. This is the fastest way to debug unexpected follow-up behavior.
+</Tip>

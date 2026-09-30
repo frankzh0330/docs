@@ -1,0 +1,156 @@
+---
+title: "QueryState: Semantic DSL Shape and Field Reference"
+sidebarTitle: "QueryState"
+description: "QueryState is the normalized semantic representation of a resolved query — the shape of the semantic field returned in every successful nl2dsl response."
+---
+
+QueryState is the normalized, structured representation of a resolved query. It is returned in the `semantic` field of every `POST /nl2dsl` response and is the single source of truth for what the agent understood from your request. In multi-turn sessions, the previous QueryState is what follow-up queries patch — only the explicitly mentioned fields change, while the rest carry over unchanged.
+
+## QueryState shape
+
+```json
+{
+  "event": "app_launch",
+  "metric": "pv",
+  "time_range": {
+    "type": "last_n_days",
+    "n": 7
+  },
+  "region_filter": ["DE"],
+  "group_by": ["country"],
+  "filters": [],
+  "turn_type": "new_query"
+}
+```
+
+## Fields
+
+<ResponseField name="event" type="string">
+  The resolved canonical event name from your metadata catalog. This is the action or occurrence the user is measuring.
+
+  Examples: `app_launch`, `purchase`, `activation_success`
+</ResponseField>
+
+<ResponseField name="metric" type="string">
+  The resolved aggregation metric applied to the event.
+
+  Common values:
+
+  | Value | Meaning |
+  |---|---|
+  | `pv` | Page/event views — total occurrence count |
+  | `uv` | Unique users — deduplicated user count |
+</ResponseField>
+
+<ResponseField name="time_range" type="object">
+  The normalized time window for the query.
+
+  <Expandable title="time_range fields">
+    <ResponseField name="type" type="string">
+      The time range type. Supported values:
+
+      | Type | Description |
+      |---|---|
+      | `last_n_days` | Last N calendar days (pair with `n`) |
+      | `yesterday` | The previous calendar day |
+      | `today` | The current calendar day |
+      | `last_week` | Last full calendar week |
+      | `custom` | Explicit start/end date range |
+    </ResponseField>
+    <ResponseField name="n" type="integer">
+      Number of days. Only present when `type` is `last_n_days`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="region_filter" type="array of strings">
+  List of resolved region codes to filter by. An empty array means no region filter is applied.
+
+  Examples: `["DE"]`, `["US"]`, `["ROW"]` (Rest of World), `["DE", "US"]`
+</ResponseField>
+
+<ResponseField name="group_by" type="array of strings">
+  List of resolved dimension names to group query results by. An empty array means no grouping is applied.
+
+  Examples: `["country"]`, `["channel"]`, `["country", "channel"]`
+</ResponseField>
+
+<ResponseField name="filters" type="array">
+  Additional resolved filter conditions applied to the query. Each entry represents a structured filter predicate beyond region. Empty in most basic queries.
+</ResponseField>
+
+<ResponseField name="turn_type" type="string">
+  The turn classification for this query turn.
+
+  | Value | Meaning |
+  |---|---|
+  | `new_query` | Fresh query — all fields extracted from the current text |
+  | `followup_patch` | Follow-up — some fields inherited from the previous QueryState |
+  | `confirmation` | Confirmation reply — resumed from a pending task |
+</ResponseField>
+
+## How QueryState is used
+
+QueryState serves two purposes in the Query Agent pipeline:
+
+**1. Human-readable explanation** — the `semantic` field shows you exactly what the agent understood. If the resolved event or metric is wrong, you can see it immediately without needing to inspect the raw `exec_dsl`.
+
+**2. Follow-up patching** — in multi-turn sessions, the agent stores the current QueryState after each successful turn. When the next turn arrives, the agent decides whether it is a new query or a follow-up. For follow-ups, only the explicitly mentioned fields are patched — everything else is inherited from the previous state. This is what makes partial queries like "change it to yesterday" or "break it down by channel" work without the user having to repeat the full query.
+
+<Tip>
+  A multi-turn session looks like this in practice:
+
+  ```
+  Q1: Show PV for app_launch in Germany         → new_query, all fields explicit
+  Q2: Change it to yesterday                    → followup_patch, time_range patched
+  Q3: Break it down by channel                  → followup_patch, group_by patched
+  Q4: What about the US?                        → followup_patch, region_filter patched
+  ```
+</Tip>
+
+## Reading resolver_explain
+
+The `explain.resolver_explain` field in the `NL2DSLResponse` shows you which fields in the current QueryState were resolved from the current turn (`explicit`) versus inherited from the previous state (`inherited`):
+
+```json
+{
+  "resolver_explain": {
+    "event": {
+      "source": "inherited",
+      "value": "app_launch"
+    },
+    "metric": {
+      "source": "explicit",
+      "value": "uv",
+      "score": 100.0
+    },
+    "time_range": {
+      "source": "inherited"
+    },
+    "region_filter": {
+      "source": "inherited"
+    }
+  }
+}
+```
+
+In this example, only `metric` changed (from `pv` to `uv`) — everything else was carried over from the previous turn. The `score` field appears on explicitly resolved fields and represents the matcher's confidence (0–100).
+
+<Note>
+  When `source` is `inherited`, no `score` is present because the field was not re-matched in the current turn — it was copied directly from `last_query_state`.
+</Note>
+
+## Semantic DSL vs. Exec DSL
+
+The `semantic` (QueryState) and `exec_dsl` fields serve different roles:
+
+<Accordion title="Why are there two DSL representations?">
+  **Semantic DSL** (`semantic`) represents the normalized intent. It is human-readable, field-level, and independent of your downstream query system's specific format. You can inspect it, validate it, and use it to explain the agent's reasoning.
+
+  **Exec DSL** (`exec_dsl`) is the executable payload formatted for your downstream query system. It is generated from the semantic DSL by the renderer and may include system-specific IDs, encodings, or query syntax that are opaque without context.
+
+  The separation makes it possible to:
+  - debug at the intent level before worrying about execution
+  - patch and validate the semantic state across turns
+  - run eval cases against the semantic layer independently of execution
+</Accordion>

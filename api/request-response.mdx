@@ -1,0 +1,167 @@
+---
+title: "Request and Response Shapes for the Query Agent API"
+sidebarTitle: "Request & Response"
+description: "Complete field reference for NL2DSLRequest and NL2DSLResponse — the request and response models used by the POST /nl2dsl endpoint."
+---
+
+Every call to `POST /nl2dsl` uses the `NL2DSLRequest` body and returns an `NL2DSLResponse`. This page documents every field in both models so you know exactly what to send and what to expect back.
+
+## NL2DSLRequest
+
+The request body for `POST /nl2dsl`.
+
+<ParamField body="text" type="string" required>
+  Your natural language query. Write it as you would ask a colleague: "Show PV for app_launch in Germany over the last 7 days." The agent extracts `event`, `metric`, `time_range`, `region_filter`, and `group_by` from this text.
+</ParamField>
+
+<ParamField body="project_id" type="integer" default="55">
+  The project scope for this query. Controls which metadata catalog is used for event/metric/dimension resolution and which project memory is injected into the LLM context.
+</ParamField>
+
+<ParamField body="session_id" type="string">
+  Session identifier from a previous `/nl2dsl` response. Include this to send follow-up queries that patch the previous query state. Omit to start a new session.
+</ParamField>
+
+<ParamField body="user_id" type="string">
+  Optional user identifier. Enables per-user preference reranking scoped to `project_id + user_id`. When provided, Query Agent applies a weak rerank bias based on this user's historical event/metric/group_by usage patterns.
+</ParamField>
+
+<ParamField body="chat_id" type="string">
+  Telegram chat identifier. Used exclusively by the Telegram gateway to route reply notifications back to the correct chat. You can omit this field when calling the HTTP API directly.
+</ParamField>
+
+### Example request
+
+```json
+{
+  "text": "Show PV for app_launch in Germany over the last 7 days",
+  "project_id": 55,
+  "session_id": "sess-abc-123",
+  "user_id": "user-42"
+}
+```
+
+## NL2DSLResponse
+
+The response object returned by `POST /nl2dsl`.
+
+<ResponseField name="status" type="string">
+  Resolution status. See [Status Codes](/api/status-codes) for the complete reference.
+
+  | Value | Meaning |
+  |---|---|
+  | `success` | Query resolved. `semantic` and `exec_dsl` are populated. |
+  | `early_exit` | Required field could not be resolved. Check `message`. |
+  | `needs_confirmation` | Ambiguous resolution. Check `candidates`. |
+</ResponseField>
+
+<ResponseField name="session_id" type="string | null">
+  Session identifier. Pass this as `session_id` in your next request to continue the conversation and enable follow-up patching.
+</ResponseField>
+
+<ResponseField name="semantic" type="object">
+  The normalized semantic DSL — a structured representation of resolved query intent. See [QueryState](/api/query-state) for the complete field reference.
+</ResponseField>
+
+<ResponseField name="exec_dsl" type="object">
+  The executable DSL payload formatted for your downstream query system. Pass this directly to `POST /query/bearer` to execute the query.
+</ResponseField>
+
+<ResponseField name="explain" type="object">
+  Resolver and turn debug information.
+
+  <Expandable title="explain fields">
+    <ResponseField name="turn_mode" type="string">
+      Turn classification: `new_query`, `followup_patch`, or `confirmation`.
+    </ResponseField>
+    <ResponseField name="turn_explain" type="string">
+      Human-readable reason why the turn was classified as this type.
+    </ResponseField>
+    <ResponseField name="resolver_explain" type="object">
+      Per-field resolution details. Each entry contains:
+      - `value` — the canonical value chosen by the matcher
+      - `score` — confidence score from the matcher (0–100)
+      - `source` — `"explicit"` (extracted from current text) or `"inherited"` (carried over from the previous QueryState)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="extraction_json" type="object">
+  Raw structured output from the LLM extraction stage, before matcher resolution. Useful for debugging extraction issues where the LLM misread the query text.
+</ResponseField>
+
+<ResponseField name="task_id" type="string | null">
+  Non-null when `status=needs_confirmation`. The ID of the pending confirmation task. The session holds this task in persistent storage until the user confirms a selection, so it survives server restarts.
+</ResponseField>
+
+<ResponseField name="candidates" type="object | null">
+  Non-null when `status=needs_confirmation`. Maps field names to arrays of candidate objects, each with a `value` and a `score`.
+
+  ```json
+  {
+    "event": [
+      { "value": "app_launch", "score": 72.0 },
+      { "value": "app_cold_start_success", "score": 69.0 }
+    ]
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="message" type="string | null">
+  Human-readable status message. Always set when `status` is `early_exit` or `needs_confirmation`. Contains guidance on what information is missing or what the user needs to confirm.
+</ResponseField>
+
+### Example response — success
+
+```json
+{
+  "status": "success",
+  "session_id": "sess-abc-123",
+  "semantic": {
+    "event": "app_launch",
+    "metric": "pv",
+    "time_range": { "type": "last_n_days", "n": 7 },
+    "region_filter": ["DE"],
+    "group_by": ["country"],
+    "filters": [],
+    "turn_type": "new_query"
+  },
+  "exec_dsl": { "...": "downstream query payload" },
+  "explain": {
+    "turn_mode": "new_query",
+    "turn_explain": "No prior session state; all fields extracted from current text.",
+    "resolver_explain": {
+      "event": { "value": "app_launch", "score": 95.0, "source": "explicit" },
+      "metric": { "value": "pv", "score": 100.0, "source": "explicit" }
+    }
+  },
+  "extraction_json": { "...": "raw LLM output" },
+  "task_id": null,
+  "candidates": null,
+  "message": null
+}
+```
+
+## POST /query/bearer
+
+After a successful `POST /nl2dsl` call, you can execute the resolved query by passing the `exec_dsl` payload to `POST /query/bearer`.
+
+### BearerQueryRequest
+
+<ParamField body="exec_dsl" type="object" required>
+  The executable DSL payload. Use the `exec_dsl` value returned by a successful `POST /nl2dsl` response.
+</ParamField>
+
+### BearerQueryResponse
+
+<ResponseField name="result" type="object">
+  The raw result returned by the downstream query system.
+</ResponseField>
+
+<ResponseField name="success" type="boolean">
+  `true` if the downstream query executed without error, `false` otherwise.
+</ResponseField>
+
+<ResponseField name="error" type="string | null">
+  Error message from the downstream system. Only set when `success=false`.
+</ResponseField>

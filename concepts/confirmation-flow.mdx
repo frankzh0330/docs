@@ -1,0 +1,85 @@
+---
+title: "Confirmation Flow: Resolving Ambiguous Queries"
+sidebarTitle: "Confirmation Flow"
+description: "When Query Agent cannot confidently resolve a term, it returns candidates for explicit user selection instead of silently guessing the wrong answer."
+---
+
+When the matcher cannot confidently resolve a query field — for example, when two events have similar names and similar scores — Query Agent pauses and asks you to confirm which candidate is correct. This confirmation flow prevents silent wrong answers and gives you full control over ambiguous resolutions.
+
+## When confirmation is triggered
+
+Confirmation is triggered when the matcher returns `needs_confirmation=true` for any field. This happens when:
+- Two or more candidates have close confidence scores
+- The query text is ambiguous and no single candidate clearly dominates
+
+## What you receive
+
+Instead of `status=success`, the response carries `status=needs_confirmation`:
+
+```json
+{
+  "status": "needs_confirmation",
+  "task_id": "task-xyz-789",
+  "session_id": "abc-123",
+  "candidates": {
+    "event": [
+      { "value": "app_launch", "score": 72.0 },
+      { "value": "app_cold_start_success", "score": 69.0 }
+    ]
+  },
+  "message": "Please confirm the event. Reply with the number of your choice."
+}
+```
+
+Present these candidates to the user and wait for their selection.
+
+## Confirming a selection
+
+To confirm, send the user's reply (typically a number) with the same `session_id`:
+
+```bash
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "1",
+    "session_id": "abc-123"
+  }'
+```
+
+The agent:
+1. Detects that `session_id` has a pending task (`task_id`)
+2. Applies the confirmed candidate (`app_launch`)
+3. Continues DSL generation from where it paused
+4. Returns `status=success` with the completed DSL
+5. Clears the `pending_task_id` from the session
+
+## Persistence across restarts
+
+Confirmation tasks are persisted separately from sessions as JSONL append-only task logs. If your server restarts between when a confirmation is issued and when the user replies:
+
+<Steps>
+  <Step title="Confirmation is issued">
+    Query returns `status=needs_confirmation` with `task_id`. The pending task is written to disk.
+  </Step>
+  <Step title="Server restarts">
+    On startup, Query Agent restores all pending tasks from the task log.
+  </Step>
+  <Step title="User replies">
+    The user sends their selection with the original `session_id`. The restored task picks up exactly where it left off.
+  </Step>
+  <Step title="Query completes">
+    The confirmed candidate is applied and the full DSL is returned.
+  </Step>
+</Steps>
+
+<Note>
+  Pending tasks are persisted durably. Your server can restart between when a confirmation is issued and when the user replies — the task will still be available when the user responds.
+</Note>
+
+## Confirmation in multi-turn sessions
+
+Confirmation integrates naturally with follow-up queries. If a confirmation is triggered during a follow-up patch:
+
+- The inherited fields from the previous `QueryState` are preserved in the pending task
+- Once confirmed, the patched field is applied on top of the inherited state
+- The merged result continues through the pipeline as normal

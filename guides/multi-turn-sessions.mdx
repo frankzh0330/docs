@@ -1,0 +1,187 @@
+---
+title: "Build Multi-Turn Data Query Sessions with Query Agent"
+sidebarTitle: "Multi-Turn Sessions"
+description: "Learn how to build conversational multi-turn data query sessions using Query Agent's session_id, follow-up patching, and confirmation flow."
+---
+
+Query Agent is designed for conversational data querying. After your first query, you can refine, pivot, or extend it with follow-up messages — the agent patches only the fields you mention, keeping everything else from the previous turn. This guide walks through a full multi-turn session including a confirmation step.
+
+## Start a session
+
+Send your first query without a `session_id`. A new session is created automatically:
+
+```bash
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Show PV for app_launch in Germany",
+    "project_id": 55
+  }'
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "session_id": "sess-abc-123",
+  "semantic": {
+    "event": "app_launch",
+    "metric": "pv",
+    "region_filter": ["DE"]
+  }
+}
+```
+
+Save `session_id` — you need it for every follow-up turn.
+
+## Send follow-up queries
+
+Each follow-up should include the same `session_id`. Mention only the fields you want to change. The agent carries everything else forward from the previous turn's resolved state:
+
+<Steps>
+  <Step title="Change the time range">
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Change it to yesterday",
+        "project_id": 55,
+        "session_id": "sess-abc-123"
+      }'
+    ```
+
+    The agent patches only `time_range`. Event, metric, and region are inherited from the previous turn.
+  </Step>
+
+  <Step title="Add a group_by dimension">
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Break it down by channel",
+        "project_id": 55,
+        "session_id": "sess-abc-123"
+      }'
+    ```
+
+    The agent adds `group_by=["channel"]` while keeping all other fields.
+  </Step>
+
+  <Step title="Change the region">
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "What about the US?",
+        "project_id": 55,
+        "session_id": "sess-abc-123"
+      }'
+    ```
+
+    Only `region_filter` changes to `["US"]`. Event, metric, time range, and group_by are all inherited.
+  </Step>
+</Steps>
+
+## Handle confirmation mid-session
+
+If a follow-up introduces an ambiguous term, the response returns `status=needs_confirmation`. The session pauses until the user selects a candidate. Handling this mid-session is straightforward:
+
+```bash
+# Follow-up that triggers confirmation
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Compare with startup",
+    "project_id": 55,
+    "session_id": "sess-abc-123"
+  }'
+```
+
+```json
+{
+  "status": "needs_confirmation",
+  "task_id": "task-xyz",
+  "candidates": {
+    "event": [
+      { "value": "app_launch", "score": 72.0 },
+      { "value": "app_cold_start_success", "score": 69.0 }
+    ]
+  }
+}
+```
+
+Display the candidates to the user, then send their reply with the same `session_id`:
+
+```bash
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "2",
+    "session_id": "sess-abc-123"
+  }'
+```
+
+The confirmation reply continues the query from where it paused. The confirmed event is applied and the DSL is returned with `status=success`.
+
+<Note>
+  Confirmation tasks are persisted to disk. If the server restarts between the ambiguous query and the user's reply, the session automatically restores the pending task and handles the confirmation correctly.
+</Note>
+
+## Understand field sources in explain
+
+Each response's `explain.resolver_explain` shows how every field was sourced in the current turn:
+
+```json
+{
+  "explain": {
+    "turn_mode": "followup_patch",
+    "resolver_explain": {
+      "event": { "source": "inherited", "value": "app_launch" },
+      "metric": { "source": "inherited", "value": "pv" },
+      "time_range": { "source": "explicit", "value": "yesterday" },
+      "region_filter": { "source": "inherited", "value": ["DE"] }
+    }
+  }
+}
+```
+
+| Source value | Meaning |
+|---|---|
+| `explicit` | Extracted from the current turn's text |
+| `inherited` | Carried forward from the previous turn's resolved state |
+
+Use this information to verify that the agent is patching exactly the fields you expect and inheriting everything else.
+
+## Turn modes
+
+The `explain.turn_mode` field tells you how the agent classified the current turn:
+
+| Turn mode | What happened |
+|---|---|
+| `new_query` | A fresh query — no inheritance from previous state |
+| `followup_patch` | A partial update — unmentioned fields are inherited |
+| `confirmation` | A reply to a pending `needs_confirmation` task |
+
+## Start a new query in the same session
+
+If you want to start a completely new query rather than a follow-up, you can either omit `session_id` to create a fresh session, or send a query whose intent is clearly new — the agent detects `turn_mode=new_query` automatically and resets the state.
+
+<Tip>
+  When in doubt, omitting `session_id` and starting a fresh session is always safe. Use session continuity only when you explicitly want follow-up patching behavior.
+</Tip>
+
+## Debug and inspect sessions
+
+Use the session debug APIs to inspect or clean up sessions during development:
+
+```bash
+# List all active sessions
+curl http://localhost:8000/sessions
+
+# Inspect a specific session
+curl http://localhost:8000/sessions/sess-abc-123
+
+# Delete a session
+curl -X DELETE http://localhost:8000/sessions/sess-abc-123
+```

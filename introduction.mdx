@@ -1,0 +1,67 @@
+---
+title: "Introduction to Query Agent: NL2DSL Pipeline Guide"
+sidebarTitle: "Introduction"
+description: "Learn what Query Agent is, how the NL2DSL pipeline transforms plain-language questions into executable DSL, and when to use it for your data needs."
+---
+
+Query Agent is a data-query-oriented NL2DSL agent. You send it a plain-language question — for example, "Show PV for app_launch in Germany over the last 7 days" — and it extracts the intent, resolves catalog metadata, and returns a structured DSL your downstream query system can execute.
+
+## Why Query Agent
+
+Building a natural language interface for analytics is hard. Query Agent handles the hardest parts:
+
+- **Intent extraction** — parses free-form text into structured fields (`event`, `metric`, `time`, `region`, `group_by`)
+- **Catalog matching** — maps natural-language terms to canonical event and dimension names in your metadata catalog
+- **Multi-turn conversations** — follow-up questions patch the previous query state instead of starting from scratch
+- **Confirmation flow** — when resolution is ambiguous, the agent returns candidates and waits for explicit confirmation
+- **Memory layers** — session context, project-level business rules, and per-user preference signals all improve results over time
+
+## How it works
+
+Every query goes through this pipeline:
+
+```
+Natural Language
+  → LLM Extraction
+  → Matcher Resolution
+  → QueryState / Turn Logic
+  → Semantic DSL
+  → Exec DSL
+  → Validation
+```
+
+The output is a `NL2DSLResponse` containing both a **Semantic DSL** (human-readable normalized intent) and an **Exec DSL** (executable payload for your query backend).
+
+## Entry points
+
+Query Agent exposes two integration paths:
+
+<CardGroup cols={2}>
+  <Card title="HTTP API" icon="globe" href="/api/nl2dsl">
+    POST /nl2dsl — send a query, get back structured DSL. Works with any HTTP client.
+  </Card>
+  <Card title="Telegram Bot" icon="paper-plane" href="/guides/telegram-integration">
+    Connect a Telegram bot token to let users query data through chat messages.
+  </Card>
+</CardGroup>
+
+## Key concepts
+
+<CardGroup cols={2}>
+  <Card title="NL2DSL Pipeline" icon="diagram-project" href="/concepts/nl2dsl-pipeline">
+    Step-by-step breakdown of how a query flows from text to executable DSL.
+  </Card>
+  <Card title="Turn-Based Queries" icon="rotate" href="/concepts/turn-based-queries">
+    How follow-up queries work without re-stating all fields.
+  </Card>
+  <Card title="Memory Layers" icon="brain" href="/concepts/memory-layers">
+    Session, project, and user preference memory — and how each is scoped.
+  </Card>
+  <Card title="Confirmation Flow" icon="circle-check" href="/concepts/confirmation-flow">
+    How ambiguous queries are handled with explicit candidate selection.
+  </Card>
+</CardGroup>
+
+## Next step
+
+Ready to make your first query? Head to the [Quick Start](/quickstart) to install and run Query Agent.

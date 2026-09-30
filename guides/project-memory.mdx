@@ -1,0 +1,128 @@
+---
+title: "Use Project Memory to Set Project-Wide Business Rules"
+sidebarTitle: "Project Memory"
+description: "Learn how to add project-specific business rules, event mappings, and domain corrections to Query Agent's project memory files to improve query accuracy."
+---
+
+Project memory lets you encode project-specific knowledge that applies to everyone querying a given project — default event mappings, business constraints, domain terminology corrections, and interpretation caveats. When a user sends a query, Query Agent selects the most relevant memory snippets and injects them into the LLM context before extraction, so the agent resolves ambiguous terms consistently across all users and sessions.
+
+## Why project memory matters
+
+Consider a project where "activation" is an ambiguous term. Your catalog may have `activation_start`, `activation_success`, and `activation_fail`. Without guidance, the LLM might resolve "activation" differently each time. With a project memory entry, you can pin the default:
+
+```
+In this project, "activation" means activation_success by default.
+```
+
+This rule is not a user preference — it applies to the whole project and every user querying it. That is why it belongs in project memory rather than user preference.
+
+## Memory file location
+
+Project memory lives at:
+
+```
+data/memory/project_{id}/MEMORY.md
+```
+
+Where `{id}` is the `project_id` you pass in API requests. Create the directory and file manually if it does not exist yet:
+
+```bash
+mkdir -p data/memory/project_55
+touch data/memory/project_55/MEMORY.md
+```
+
+## Memory file format
+
+Use Markdown sections to organize memory entries. Query Agent selects relevant snippets by matching the current query text against the memory content, so writing clear and specific entries helps retrieval:
+
+```markdown
+## Corrections
+- "activation" means activation_success by default.
+- "startup" refers to app_launch, not app_startup_complete.
+
+## Constraints
+- Exclude internal traffic for all queries (exclude_internal=true).
+- For payment events, always filter to external users only.
+
+## Default Mappings
+- "payment" events default to payment_submit unless stated otherwise.
+- Region "global" maps to the ROW filter.
+
+## Caveats
+- app_launch event data before 2024-01-01 has known sampling issues. Add a note in responses.
+```
+
+<Tip>
+  Write entries in concrete, plain language. The agent injects these snippets directly into the LLM prompt, so clarity and specificity matter more than formatting style.
+</Tip>
+
+## Add a memory entry
+
+<Steps>
+  <Step title="Identify the rule to encode">
+    Find a case where users consistently ask about the same concept using ambiguous language, or where a domain term has a project-specific meaning that differs from its generic one. Common candidates are event name aliases, default metric choices, and traffic exclusion rules.
+  </Step>
+
+  <Step title="Write the entry">
+    Open `data/memory/project_{id}/MEMORY.md` and add a clear, specific entry under the appropriate section:
+
+    ```markdown
+    ## Corrections
+    - "launch" means app_launch in this project, not app_cold_start.
+    ```
+
+    Use the section headings `Corrections`, `Constraints`, `Default Mappings`, and `Caveats` to keep entries organized and easy to scan.
+  </Step>
+
+  <Step title="Test with a query">
+    Send a query that should trigger the memory entry:
+
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Show launch PV yesterday",
+        "project_id": 55
+      }'
+    ```
+
+    Check the `explain.resolver_explain` in the response to confirm the correct event was resolved. If the memory entry was applied, the event field should show `app_launch` with `source: explicit` rather than a lower-confidence candidate.
+  </Step>
+</Steps>
+
+## Async memory learning
+
+Query Agent can also learn from successful queries automatically. When a query resolves correctly and contains reusable knowledge, the async memory writer may append a new entry to your project's `MEMORY.md`. This process is:
+
+- **Non-blocking** — it happens after the response is already returned to the caller
+- **Failure-tolerant** — write failures do not affect query results or the main pipeline
+- **Additive** — entries are only appended, never modified or deleted automatically
+
+<Note>
+  Review your project's `MEMORY.md` periodically to check what was learned automatically. Remove or correct any entries that do not accurately reflect your business rules.
+</Note>
+
+## Memory priority order
+
+Project memory is one of three memory layers in Query Agent. Understanding where it sits in the priority order helps you decide what belongs here versus elsewhere:
+
+```
+explicit user input
+  > session state
+  > project memory
+  > user preference rerank
+```
+
+Project memory is authoritative over user preference, but it cannot override what a user states explicitly in their current query or what is already established in the active session.
+
+## Project memory vs. user preference
+
+| | Project Memory | User Preference |
+|---|---|---|
+| **Scope** | All users in a project | Single user in a project |
+| **Trust level** | High | Medium (weak signal) |
+| **Use for** | Business rules, domain corrections, default mappings | Personal query habits, frequent event choices |
+| **Applied at** | LLM extraction (prompt injection before extraction) | Post-recall rerank bias (after matcher recall) |
+| **Overrides** | User preference rerank signals | Nothing — suggestion only |
+
+Use project memory for anything that should be true for every user querying a project. Use user preference only to gently nudge ranking when multiple candidates are equally plausible for a specific user.

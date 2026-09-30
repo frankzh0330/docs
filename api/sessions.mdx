@@ -1,0 +1,200 @@
+---
+title: "Sessions API: Inspect and Manage Query Sessions"
+sidebarTitle: "Sessions API"
+description: "List, inspect, and delete Query Agent sessions using the GET and DELETE /sessions endpoints. Useful for session management and debugging multi-turn state."
+---
+
+The Sessions API lets you inspect active sessions and delete them when needed. Sessions are the mechanism Query Agent uses to carry `last_query_state` across turns — use these endpoints to debug multi-turn query behavior, audit active sessions, manage session lifecycle, or build session monitoring into your application.
+
+## Endpoints overview
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/sessions` | List all active sessions |
+| `GET` | `/sessions/{session_id}` | Get full context for a single session |
+| `DELETE` | `/sessions/{session_id}` | Delete a session and its state |
+
+---
+
+## GET /sessions
+
+Returns all active sessions and a total count.
+
+```bash
+curl http://localhost:8000/sessions
+```
+
+### Response
+
+<ResponseField name="count" type="integer">
+  Total number of active sessions currently held in memory.
+</ResponseField>
+
+<ResponseField name="sessions" type="array">
+  List of session summary objects. Each entry includes at minimum a `session_id` and associated metadata. See [Get a session](#get-sessions-session_id) for the full session context shape.
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "count": 2,
+  "sessions": [
+    {
+      "session_id": "sess-abc-123",
+      "project_id": 55,
+      "turn_count": 3,
+      "pending_task_id": null
+    },
+    {
+      "session_id": "sess-def-456",
+      "project_id": 55,
+      "turn_count": 1,
+      "pending_task_id": "task-xyz-789"
+    }
+  ]
+}
+```
+
+---
+
+## GET /sessions/{session_id}
+
+Returns the full session context for a single session, including the `last_query_state` that will be inherited on the next follow-up turn.
+
+```bash
+curl http://localhost:8000/sessions/sess-abc-123
+```
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session identifier. Use the `session_id` value returned by any `/nl2dsl` response.
+</ParamField>
+
+### Response
+
+<ResponseField name="session_id" type="string">
+  The session identifier.
+</ResponseField>
+
+<ResponseField name="project_id" type="integer">
+  The project scope this session is associated with.
+</ResponseField>
+
+<ResponseField name="last_query_state" type="object">
+  The structured query state from the most recent successful turn. This is the state that will be inherited by the next follow-up query. Its shape matches the `semantic` field of a `/nl2dsl` success response.
+
+  <Expandable title="last_query_state fields">
+    <ResponseField name="event" type="string">
+      Resolved canonical event name from the last turn.
+    </ResponseField>
+    <ResponseField name="metric" type="string">
+      Resolved metric from the last turn.
+    </ResponseField>
+    <ResponseField name="time_range" type="object">
+      Normalized time window from the last turn.
+    </ResponseField>
+    <ResponseField name="region_filter" type="array">
+      Resolved region codes from the last turn.
+    </ResponseField>
+    <ResponseField name="group_by" type="array">
+      Dimension groupings from the last turn.
+    </ResponseField>
+    <ResponseField name="filters" type="array">
+      Additional filters from the last turn.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="pending_task_id" type="string | null">
+  The ID of an unresolved confirmation task, if any. Non-null means the session is waiting for the user to confirm a candidate. The next request to `/nl2dsl` with this `session_id` will be treated as a confirmation reply.
+</ResponseField>
+
+<ResponseField name="turn_count" type="integer">
+  Number of completed turns in this session.
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "session_id": "sess-abc-123",
+  "project_id": 55,
+  "last_query_state": {
+    "event": "app_launch",
+    "metric": "pv",
+    "time_range": { "type": "last_n_days", "n": 7 },
+    "region_filter": ["DE"],
+    "group_by": [],
+    "filters": []
+  },
+  "pending_task_id": null,
+  "turn_count": 3
+}
+```
+
+**Returns `404`** if the session does not exist.
+
+<Tip>
+  Use this endpoint to debug unexpected follow-up behavior. If a follow-up query is inheriting the wrong fields, inspect `last_query_state` here to see exactly what the agent will carry into the next turn.
+</Tip>
+
+---
+
+## DELETE /sessions/{session_id}
+
+Deletes a session and all its associated state, including `last_query_state` and any pending confirmation task.
+
+```bash
+curl -X DELETE http://localhost:8000/sessions/sess-abc-123
+```
+
+### Path parameters
+
+<ParamField path="session_id" type="string" required>
+  The session identifier to delete.
+</ParamField>
+
+### Response
+
+<ResponseField name="deleted" type="string">
+  The `session_id` that was deleted.
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "deleted": "sess-abc-123"
+}
+```
+
+**Returns `404`** if the session does not exist.
+
+<Note>
+  Deleting a session clears its `last_query_state` and cancels any pending confirmation task. The next `/nl2dsl` request that uses the deleted `session_id` will be treated as a brand-new session — all fields will be resolved from scratch rather than inherited.
+</Note>
+
+---
+
+## Session lifecycle
+
+Sessions are created automatically the first time you call `POST /nl2dsl` without a `session_id`. The response includes the new `session_id`, which you pass in subsequent requests to continue the conversation.
+
+A background cleanup job runs every **5 minutes** and removes sessions that have been inactive for more than **60 minutes** (configurable via server settings). Session state — including `last_query_state` and pending confirmation tasks — is persisted between process restarts, so active sessions are not lost if the server is restarted.
+
+```
+New session created
+    │
+    ├─ Turn 1: new_query → last_query_state saved
+    ├─ Turn 2: followup_patch → last_query_state updated
+    ├─ Turn 3: needs_confirmation → pending_task_id set
+    ├─ Turn 4: confirmation reply → task resolved, last_query_state updated
+    │
+    └─ Session expires after 60 min inactivity  ──or──  DELETE /sessions/{id}
+```
+
+<Warning>
+  If a session has a non-null `pending_task_id`, the next `/nl2dsl` request with that `session_id` is interpreted as a confirmation reply, not a new query. If you want to start a fresh query instead, delete the session first or omit the `session_id`.
+</Warning>

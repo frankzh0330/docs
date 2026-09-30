@@ -1,0 +1,92 @@
+---
+title: "Configure Query Agent: Environment Variables Guide"
+sidebarTitle: "Configuration"
+description: "Complete reference for Query Agent environment variables including message bus backend, Telegram integration, catalog sync, and logging settings."
+---
+
+Query Agent is configured entirely through environment variables. Copy `.env.example` to `.env` in the project root, then set the variables below to match your environment. Changes take effect on the next server restart.
+
+## Core server settings
+
+<ParamField query="PORT" type="integer" default="8000">
+  The port the HTTP server listens on.
+</ParamField>
+
+<ParamField query="HOST" type="string" default="0.0.0.0">
+  The network interface to bind. Use `127.0.0.1` to restrict to localhost only.
+</ParamField>
+
+<ParamField query="LOG_LEVEL" type="string" default="DEBUG">
+  Log verbosity level. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+</ParamField>
+
+## Message bus backend
+
+Query Agent supports two message bus modes that control how messages are routed from gateways to the agent worker.
+
+<ParamField query="MESSAGE_BUS_BACKEND" type="string" default="direct">
+  Set to `direct` (default) for in-process message passing, or `redis` for a Redis-backed bus. Use `redis` when running multiple worker processes or when deploying via Docker Compose.
+</ParamField>
+
+<ParamField query="REDIS_URL" type="string" default="redis://localhost:6379/0">
+  Redis connection URL. Only used when `MESSAGE_BUS_BACKEND=redis`.
+</ParamField>
+
+<Note>
+  When using `MESSAGE_BUS_BACKEND=redis`, start the full stack with:
+  ```bash
+  MESSAGE_BUS_BACKEND=redis docker-compose up --build
+  ```
+</Note>
+
+## Telegram gateway
+
+<ParamField query="TELEGRAM_BOT_TOKEN" type="string">
+  Your Telegram bot token from [@BotFather](https://t.me/BotFather). When set, Query Agent starts a long-polling Telegram gateway that routes chat messages through the NL2DSL pipeline. Omit to disable Telegram integration.
+</ParamField>
+
+See [Telegram Integration](/guides/telegram-integration) for a full setup walkthrough.
+
+## Catalog synchronization
+
+The query matcher resolves natural-language terms against a metadata catalog. In production, this catalog is synced from an external HTTP source.
+
+<ParamField query="CATALOG_API_BASE" type="string">
+  Base URL of your metadata service. When set, Query Agent syncs events and dimensions from this API at startup and on a schedule (incremental every hour, full refresh every 6 hours). Omit to use only the bundled demo YAML catalog.
+</ParamField>
+
+<Tip>
+  The bundled `catalog/*.yaml` files work well for local development and demos. For production deployments with large event catalogs (tens of thousands of events), set `CATALOG_API_BASE` to point at your metadata service.
+</Tip>
+
+## Query behavior
+
+<ParamField query="TOOL_CALLING_ENABLED" type="boolean" default="true">
+  Set to `false` to disable LLM tool/function calling. Useful when your LLM provider does not support tool calling or you want to force prompt-only extraction.
+</ParamField>
+
+## Deployment modes
+
+<Tabs>
+  <Tab title="Local (direct bus)">
+    The simplest mode — no Redis needed. All processing happens in a single process.
+
+    ```bash
+    python server.py
+    ```
+  </Tab>
+  <Tab title="Development (hot reload)">
+    Uses `uvicorn` with `--reload` so the server restarts automatically on code changes.
+
+    ```bash
+    uvicorn server:app_with_ws --reload --port 8000
+    ```
+  </Tab>
+  <Tab title="Redis (Docker Compose)">
+    Runs the full stack — server, Redis, and any configured gateways — via Docker Compose.
+
+    ```bash
+    MESSAGE_BUS_BACKEND=redis docker-compose up --build
+    ```
+  </Tab>
+</Tabs>

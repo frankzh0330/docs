@@ -1,0 +1,90 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Query Agent",
+  "projectDescription": "A natural-language-to-DSL agent that converts plain-language data queries into structured, executable DSL with multi-turn session support, confirmation flows, and adaptive memory layers.",
+  "theme": "luma",
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/nl2dsl-pipeline",
+              "concepts/turn-based-queries",
+              "concepts/memory-layers",
+              "concepts/confirmation-flow"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/first-query",
+              "guides/multi-turn-sessions",
+              "guides/project-memory",
+              "guides/telegram-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/nl2dsl",
+              "api/bearer-query",
+              "api/sessions"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "api/request-response",
+              "api/query-state",
+              "api/status-codes"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Natural language to structured DSL conversion (NL2DSL)",
+    "Multi-turn conversational query sessions with follow-up patching",
+    "Three-layer memory: Session Memory, Project Memory, and User Preference Signal",
+    "Confirmation flow for ambiguous or low-confidence query resolution",
+    "Async memory learning — successful queries write back corrections and preferences",
+    "Telegram gateway integration with message-bus-based worker orchestration",
+    "Direct and Redis message bus backends",
+    "JSONL-based session and task persistence with restart recovery",
+    "Catalog synchronization from HTTP metadata services",
+    "Data-driven end-to-end evaluation harness"
+  ],
+  "publicApiSurface": [
+    "POST /nl2dsl",
+    "POST /query/bearer",
+    "GET /sessions",
+    "GET /sessions/{session_id}",
+    "DELETE /sessions/{session_id}",
+    "NL2DSLRequest (text, project_id, session_id, user_id)",
+    "NL2DSLResponse (extraction_json, semantic, exec_dsl, explain, status, task_id, candidates)",
+    "status=success | early_exit | needs_confirmation",
+    "MESSAGE_BUS_BACKEND env var (direct | redis)",
+    "TELEGRAM_BOT_TOKEN env var",
+    "CATALOG_API_BASE env var"
+  ]
+}

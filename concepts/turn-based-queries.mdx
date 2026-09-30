@@ -1,0 +1,81 @@
+---
+title: "Turn-Based Queries: Multi-Turn Conversational Data Queries"
+sidebarTitle: "Turn-Based Queries"
+description: "Learn how Query Agent maintains query state across conversation turns, so your follow-up questions only need to specify what changed."
+---
+
+Query Agent supports multi-turn conversational querying. When you send a follow-up message in an existing session, the agent detects what changed and patches only those fields — you do not need to re-state the full query every time.
+
+## How it works
+
+Each session maintains a `last_query_state` that stores the resolved fields from the most recent successful query. When you send a follow-up, the system:
+
+1. Classifies the turn as `new_query`, `followup_patch`, or `confirmation`
+2. For follow-ups, extracts only the fields you explicitly mentioned
+3. Merges the extracted patch into the previous `QueryState`
+4. Continues the pipeline with the merged state
+
+## Example conversation
+
+```
+Q1: Show PV for app_launch in Germany
+→ event=app_launch, metric=pv, region=DE, time=default
+
+Q2: Change it to yesterday
+→ only time_range changes; event, metric, region are inherited
+
+Q3: Break it down by channel
+→ adds group_by=channel; all other fields inherited
+
+Q4: What about the US?
+→ only region_filter changes to US
+```
+
+Each follow-up only needs to express what is new. The `explain` field in each response shows which fields were `explicit` (from the current turn) and which were `inherited` (from the previous state).
+
+## Using sessions
+
+To send follow-up queries, include the `session_id` from the previous response:
+
+```bash
+# First query — no session_id needed
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Show PV for app_launch in Germany",
+    "project_id": 55
+  }'
+# Response includes: "session_id": "abc-123"
+
+# Follow-up — include session_id
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Change it to yesterday",
+    "project_id": 55,
+    "session_id": "abc-123"
+  }'
+```
+
+<Note>
+  If you omit `session_id`, the agent creates a new session and treats the query as a fresh `new_query`.
+</Note>
+
+## Turn classification
+
+The agent uses the current text and session context to classify each turn:
+
+| Turn type | When it occurs | What happens |
+|---|---|---|
+| `new_query` | No session, or query introduces a completely different intent | Full NL2DSL pipeline from scratch |
+| `followup_patch` | Session exists and query modifies a subset of fields | Patch extraction + state merge |
+| `confirmation` | Session has a pending task from a previous `needs_confirmation` response | Restore task, apply selection, continue |
+
+The `explain.turn_explain` field in each response tells you which turn type was detected and why.
+
+## Session persistence
+
+Session state is persisted automatically. If the server restarts:
+- Active sessions are restored
+- Pending confirmation tasks survive restarts
+- Follow-up queries in restored sessions work correctly

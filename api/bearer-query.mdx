@@ -1,0 +1,142 @@
+---
+title: "POST /query/bearer — Execute a Downstream Data Query"
+sidebarTitle: "POST /query/bearer"
+description: "POST /query/bearer executes a downstream Bearer query using the exec_dsl payload from a successful /nl2dsl response. Returns raw query result data."
+---
+
+The `POST /query/bearer` endpoint executes a downstream data query using the `exec_dsl` payload returned by a successful `POST /nl2dsl` call. Use this endpoint as the second step in the two-call flow: first resolve natural language to DSL with `/nl2dsl`, then execute the resulting DSL against your data backend here to retrieve actual result data.
+
+## Request
+
+**`POST /query/bearer`**
+
+### Request body
+
+<ParamField body="exec_dsl" type="object" required>
+  The executable DSL payload. Take the `exec_dsl` field directly from a `POST /nl2dsl` response that returned `status=success` and pass it here without modification.
+
+  ```json
+  {
+    "event": "app_launch",
+    "metric": "pv",
+    "date_range": { "days": 7 },
+    "filters": { "region": ["DE"] }
+  }
+  ```
+</ParamField>
+
+<Warning>
+  Only pass `exec_dsl` from responses with `status=success`. An `early_exit` response returns an empty `exec_dsl`, and a `needs_confirmation` response returns an incomplete one — executing either will produce an error.
+</Warning>
+
+### Example request
+
+<Tabs>
+  <Tab title="curl (two-step)">
+    ```bash
+    # Step 1: Resolve natural language to DSL
+    RESPONSE=$(curl -s -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{"text": "Show PV for app_launch in Germany", "project_id": 55}')
+
+    # Step 2: Extract exec_dsl and execute the query
+    EXEC_DSL=$(echo $RESPONSE | jq '.exec_dsl')
+
+    curl -X POST http://localhost:8000/query/bearer \
+      -H "Content-Type: application/json" \
+      -d "{\"exec_dsl\": $EXEC_DSL}"
+    ```
+  </Tab>
+  <Tab title="Python (two-step)">
+    ```python
+    import httpx
+
+    # Step 1: Resolve natural language to DSL
+    nl_response = httpx.post(
+        "http://localhost:8000/nl2dsl",
+        json={"text": "Show PV for app_launch in Germany", "project_id": 55},
+    ).json()
+
+    assert nl_response["status"] == "success", nl_response["message"]
+
+    # Step 2: Execute the resolved DSL
+    result = httpx.post(
+        "http://localhost:8000/query/bearer",
+        json={"exec_dsl": nl_response["exec_dsl"]},
+    ).json()
+
+    print(result["result"])
+    ```
+  </Tab>
+  <Tab title="Direct exec_dsl">
+    ```bash
+    # You can also pass exec_dsl directly if you have it already
+    curl -X POST http://localhost:8000/query/bearer \
+      -H "Content-Type: application/json" \
+      -d '{
+        "exec_dsl": {
+          "event": "app_launch",
+          "metric": "pv",
+          "date_range": { "days": 7 },
+          "filters": { "region": ["DE"] }
+        }
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Whether the query executed successfully against the downstream system. Check this before reading `result`.
+</ResponseField>
+
+<ResponseField name="result" type="object">
+  The raw query result data returned by the downstream Bearer system. The exact structure depends on your data backend and the query type. When `success=false`, this field is an empty object.
+</ResponseField>
+
+<ResponseField name="error" type="string | null">
+  Error message when `success=false`. Contains the underlying error returned by the downstream query system. `null` when `success=true`.
+</ResponseField>
+
+### Example responses
+
+<Tabs>
+  <Tab title="Success">
+    ```json
+    {
+      "success": true,
+      "result": {
+        "data": [
+          { "date": "2025-01-01", "value": 12345 },
+          { "date": "2025-01-02", "value": 11234 },
+          { "date": "2025-01-03", "value": 13102 }
+        ],
+        "total": 36681
+      },
+      "error": null
+    }
+    ```
+  </Tab>
+  <Tab title="Error">
+    ```json
+    {
+      "success": false,
+      "result": {},
+      "error": "Downstream query system returned 503: service temporarily unavailable"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Two-call pattern
+
+`/query/bearer` is intentionally decoupled from `/nl2dsl`. This separation lets you:
+
+- **Inspect DSL before executing it.** Review `exec_dsl` and `semantic` in the `/nl2dsl` response to verify resolution correctness before triggering a downstream query.
+- **Re-execute without re-resolving.** Cache a successful `exec_dsl` and call `/query/bearer` again without repeating the LLM extraction step.
+- **Test at the semantic layer.** Validate the agent's understanding using the `semantic` and `explain` fields independently of whether you want to execute at all.
+
+<Note>
+  The `exec_dsl` format is determined by your downstream Bearer system configuration. Query Agent renders and validates the payload before returning it — but the exact shape is specific to your data backend.
+</Note>

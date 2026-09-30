@@ -1,0 +1,133 @@
+---
+title: "Connect a Telegram Bot to Your Query Agent Instance"
+sidebarTitle: "Telegram Integration"
+description: "Set up a Telegram bot that routes chat messages through Query Agent's NL2DSL pipeline, enabling users to query your data directly from Telegram."
+---
+
+Query Agent includes a built-in Telegram gateway that lets users send natural language queries through a Telegram chat. When a user messages your bot, the gateway routes the message through the full NL2DSL pipeline and replies with the query result — no webhook setup required.
+
+## How it works
+
+The Telegram integration uses long-polling, meaning your server polls Telegram's API for new messages rather than receiving them via a public endpoint. You do not need a public HTTPS URL or webhook configuration. When a user sends a message, Query Agent picks it up, runs it through the full NL2DSL pipeline, and replies with the result:
+
+```
+User message in Telegram
+  → Query Agent (long-polling)
+  → NL2DSL Pipeline
+  → Reply to user
+```
+
+The gateway starts automatically when `TELEGRAM_BOT_TOKEN` is set in your environment.
+
+## Prerequisites
+
+- A running Query Agent instance
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+
+## Create a Telegram bot and connect it
+
+<Steps>
+  <Step title="Open BotFather in Telegram">
+    Search for `@BotFather` in Telegram and start a conversation. BotFather is Telegram's official bot for creating and managing bots.
+  </Step>
+
+  <Step title="Create a new bot">
+    Send `/newbot` and follow the prompts. BotFather will ask for a display name and a username (which must end in `bot`), then reply with your bot token:
+
+    ```
+    Use this token to access the HTTP API:
+    7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    ```
+
+    Keep this token secure — anyone who has it can control your bot.
+  </Step>
+
+  <Step title="Set the token in your environment">
+    Add the token to your `.env` file:
+
+    ```bash
+    TELEGRAM_BOT_TOKEN=7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    ```
+  </Step>
+
+  <Step title="Start Query Agent">
+    Restart or start the server. The Telegram gateway starts automatically when `TELEGRAM_BOT_TOKEN` is present:
+
+    ```bash
+    python server.py
+    ```
+
+    Check the logs for a line confirming the gateway started and long-polling is active.
+  </Step>
+
+  <Step title="Test the integration">
+    Open your bot in Telegram and send a natural language query:
+
+    ```
+    Show PV for app_launch in Germany over the last 7 days
+    ```
+
+    The bot should reply with the resolved query result within a few seconds.
+  </Step>
+</Steps>
+
+<Warning>
+  Keep your `TELEGRAM_BOT_TOKEN` in your `.env` file and never commit it to version control. Add `.env` to your `.gitignore` if it is not already there.
+</Warning>
+
+## Multi-worker setup with Redis
+
+For production deployments with multiple workers, switch to the Redis message bus backend. The Redis bus ensures messages are distributed correctly across workers and prevents duplicate processing:
+
+```bash
+TELEGRAM_BOT_TOKEN=your-token MESSAGE_BUS_BACKEND=redis docker-compose up --build
+```
+
+In direct mode (the default), the message bus routes messages in-process, which is suitable for single-instance development deployments. Redis mode is recommended whenever you run more than one worker.
+
+## Session handling in Telegram
+
+Each Telegram `chat_id` maps to its own session automatically. Users can send follow-up queries naturally without any extra configuration:
+
+```
+User:  Show PV for app_launch in Germany
+Bot:   [returns resolved DSL]
+
+User:  Change it to UV
+Bot:   [patches only metric — event, region, and time are inherited]
+
+User:  What about the US?
+Bot:   [patches only region — all other fields are inherited]
+```
+
+The multi-turn session behavior is identical to the HTTP API. See [Multi-Turn Sessions](/guides/multi-turn-sessions) for a full explanation of how follow-up patching and field inheritance work.
+
+## Confirmation flow in Telegram
+
+When a query is ambiguous, the bot presents candidates and waits for a numbered reply before continuing:
+
+```
+Bot:   Found multiple matches for "startup":
+       1. app_launch (score: 72)
+       2. app_cold_start_success (score: 69)
+       Please reply with the number of your choice.
+
+User:  1
+
+Bot:   [returns resolved DSL with event=app_launch]
+```
+
+The confirmation task is persisted to disk. If the server restarts between the ambiguous query and the user's reply, the session restores the pending task automatically and handles the confirmation correctly when the user replies.
+
+<Tip>
+  Format the confirmation message clearly in your bot's response handler so users understand what they are selecting and why the choices are different.
+</Tip>
+
+## Environment variables reference
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Yes (for Telegram) | — | Token from BotFather |
+| `MESSAGE_BUS_BACKEND` | No | `direct` | `direct` for single-instance, `redis` for multi-worker |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis connection URL, used when backend is `redis` |
+| `LOG_LEVEL` | No | `DEBUG` | Log verbosity level |

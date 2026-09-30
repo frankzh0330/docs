@@ -1,0 +1,77 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Query Agent",
+  "theme": "luma",
+  "logo": {
+    "light": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg",
+    "dark": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg"
+  },
+  "favicon": "https://media.brand.dev/2b01fe20-c04b-4a1d-a2f9-1d2789c50a7a.jpg",
+  "colors": {
+    "primary": "#848c8e",
+    "light": "#11161e",
+    "dark": "#cfd0d2"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/frankzh0330/query-agent"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/nl2dsl-pipeline",
+              "concepts/turn-based-queries",
+              "concepts/memory-layers",
+              "concepts/confirmation-flow"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/first-query",
+              "guides/multi-turn-sessions",
+              "guides/project-memory",
+              "guides/telegram-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/nl2dsl",
+              "api/bearer-query",
+              "api/sessions"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "api/request-response",
+              "api/query-state",
+              "api/status-codes"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

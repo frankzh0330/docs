@@ -1,0 +1,154 @@
+---
+title: "Query Agent API Status Codes and Error Handling"
+sidebarTitle: "Status Codes"
+description: "Reference for the three Query Agent status values — success, early_exit, and needs_confirmation — with response shapes and handling guidance for each."
+---
+
+Every `POST /nl2dsl` response includes a `status` field that tells you whether the query was fully resolved, stalled due to missing information, or paused for user confirmation. Your application should handle all three values to provide a complete and predictable user experience.
+
+## Status values
+
+<Tabs>
+  <Tab title="success">
+    The query was fully resolved. The `semantic` and `exec_dsl` fields are populated and ready to use.
+
+    ```json
+    {
+      "status": "success",
+      "session_id": "sess-abc-123",
+      "semantic": {
+        "event": "app_launch",
+        "metric": "pv",
+        "time_range": { "type": "last_n_days", "n": 7 },
+        "region_filter": ["DE"],
+        "group_by": ["country"],
+        "filters": [],
+        "turn_type": "new_query"
+      },
+      "exec_dsl": { "...": "downstream query payload" },
+      "explain": { "...": "resolver and turn debug info" },
+      "extraction_json": { "...": "raw LLM output" },
+      "task_id": null,
+      "candidates": null,
+      "message": null
+    }
+    ```
+
+    **What to do:** Pass `exec_dsl` to `POST /query/bearer` to execute the query, or forward it to your own downstream system. Save `session_id` to enable follow-up queries in the same conversation.
+  </Tab>
+  <Tab title="early_exit">
+    A required field could not be resolved from the query text. The most common cause is that the text does not mention any event the catalog can match. The agent exits early rather than generating a DSL with a missing required field.
+
+    ```json
+    {
+      "status": "early_exit",
+      "message": "Could not resolve an event from the query text. Please specify the event name.",
+      "session_id": "sess-abc-123",
+      "semantic": {},
+      "exec_dsl": {},
+      "explain": {},
+      "extraction_json": {},
+      "task_id": null,
+      "candidates": null
+    }
+    ```
+
+    **What to do:** Show the `message` to the user and ask them to rephrase or be more specific. The session remains active — the next request with the same `session_id` will be treated as a follow-up that can supply the missing field.
+
+    <Tip>
+      If `early_exit` occurs repeatedly for a particular type of query, add a project memory entry that maps the user's terminology to the correct canonical event name. This trains the agent to recognize the phrasing without requiring users to change how they ask.
+    </Tip>
+  </Tab>
+  <Tab title="needs_confirmation">
+    The matcher resolved candidates for one or more fields but the confidence was not high enough to select one automatically. The agent pauses and returns the candidates for explicit user selection.
+
+    ```json
+    {
+      "status": "needs_confirmation",
+      "task_id": "task-xyz-789",
+      "session_id": "sess-abc-123",
+      "candidates": {
+        "event": [
+          { "value": "app_launch", "score": 72.0 },
+          { "value": "app_cold_start_success", "score": 69.0 }
+        ]
+      },
+      "message": "Please confirm the event. Reply with the number of your choice.",
+      "semantic": {},
+      "exec_dsl": {},
+      "explain": {},
+      "extraction_json": {}
+    }
+    ```
+
+    **What to do:**
+    1. Present the `candidates` to the user along with the `message`.
+    2. Wait for the user to reply with their selection (for example, `"1"` or `"2"`).
+    3. Send the reply as a new request with the same `session_id`.
+    4. The agent restores the pending task and continues the pipeline from where it paused.
+
+    <Warning>
+      The pending confirmation task is stored persistently. If your server restarts between issuing the confirmation response and receiving the user's reply, the task is restored and the confirmation reply still works correctly.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Status field reference
+
+| `status` | `semantic` | `exec_dsl` | `candidates` | `task_id` | `message` |
+|---|---|---|---|---|---|
+| `success` | Populated | Populated | `null` | `null` | `null` |
+| `early_exit` | Empty `{}` | Empty `{}` | `null` | `null` | Set |
+| `needs_confirmation` | Empty `{}` | Empty `{}` | Populated | Set | Set |
+
+## Recommended error handling
+
+The following example shows a complete Python handler for all three status values:
+
+```python
+import httpx
+
+def handle_nl2dsl(user_text: str, session_id: str | None = None) -> dict:
+    response = httpx.post(
+        "http://localhost:8000/nl2dsl",
+        json={
+            "text": user_text,
+            "project_id": 55,
+            "session_id": session_id,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    if data["status"] == "success":
+        exec_dsl = data["exec_dsl"]
+        session_id = data["session_id"]
+        # Pass exec_dsl to POST /query/bearer, or return to your caller.
+        return {"exec_dsl": exec_dsl, "session_id": session_id}
+
+    elif data["status"] == "early_exit":
+        session_id = data["session_id"]
+        message = data["message"]
+        # Show message to user and ask them to rephrase.
+        # Keep session_id so the follow-up can supply the missing field.
+        return {"error": message, "session_id": session_id}
+
+    elif data["status"] == "needs_confirmation":
+        session_id = data["session_id"]
+        task_id = data["task_id"]
+        candidates = data["candidates"]
+        message = data["message"]
+        # Present candidates to user, collect their reply,
+        # then send the reply as a new request with the same session_id.
+        return {
+            "pending": True,
+            "task_id": task_id,
+            "candidates": candidates,
+            "message": message,
+            "session_id": session_id,
+        }
+```
+
+<Note>
+  Always persist `session_id` from the response — including `early_exit` and `needs_confirmation` responses. The session is still active in both cases, and the next turn can resolve the outstanding issue without starting a new conversation from scratch.
+</Note>

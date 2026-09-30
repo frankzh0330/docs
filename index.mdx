@@ -1,0 +1,43 @@
+---
+title: "Query Agent: NL2DSL for Natural Language Data Queries"
+sidebarTitle: "Home"
+description: "Query Agent converts plain-language questions into structured, executable DSL queries. Supports multi-turn sessions, memory layers, and Telegram."
+---
+
+Query Agent is a data-query agent that translates natural language questions into a canonical semantic DSL and an executable query payload. Send a plain-English question via HTTP and get back a structured query result — no manual query building required.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Install, configure, and make your first NL2DSL query in minutes.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/nl2dsl">
+    Explore the POST /nl2dsl endpoint and all response fields.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/nl2dsl-pipeline">
+    Understand the NL2DSL pipeline, memory layers, and turn-based sessions.
+  </Card>
+  <Card title="Guides" icon="map" href="/guides/first-query">
+    Step-by-step walkthroughs for common use cases.
+  </Card>
+</CardGroup>
+
+## What Query Agent does
+
+Query Agent accepts a natural language question and returns a structured data query DSL. Under the hood it runs a layered pipeline:
+
+1. **LLM Extraction** — extracts `event`, `metric`, `time`, `region`, and `group_by` from your text
+2. **Matcher Resolution** — maps extracted terms to canonical catalog entries
+3. **Semantic DSL** — builds a normalized, human-readable representation of your query intent
+4. **Exec DSL** — renders the executable payload sent to your downstream query system
+
+<CardGroup cols={3}>
+  <Card title="Multi-Turn Sessions" icon="comments" href="/concepts/turn-based-queries">
+    Follow-up queries patch previous state — no need to re-state everything.
+  </Card>
+  <Card title="Memory Layers" icon="brain" href="/concepts/memory-layers">
+    Session, project, and user preference memory improve resolution quality over time.
+  </Card>
+  <Card title="Confirmation Flow" icon="circle-check" href="/concepts/confirmation-flow">
+    Ambiguous queries return candidates for explicit user confirmation before executing.
+  </Card>
+</CardGroup>

@@ -1,0 +1,104 @@
+---
+title: "How the NL2DSL Pipeline Processes Your Queries"
+sidebarTitle: "NL2DSL Pipeline"
+description: "Follow a natural language question through Query Agent's five-stage pipeline: LLM extraction, matcher resolution, semantic DSL, exec DSL, and validation."
+---
+
+Every query you send to Query Agent travels through a five-stage pipeline that transforms free-form text into a validated, executable data query. Understanding each stage helps you predict what the agent will return, debug unexpected results, and tune your catalog and project memory for better accuracy.
+
+## Pipeline overview
+
+```
+Natural Language
+  → LLM Extraction
+  → Matcher Resolution
+  → QueryState / Turn Logic
+  → Semantic DSL
+  → Exec DSL
+  → Validation
+```
+
+## Stage 1: LLM Extraction
+
+The first stage sends your query text to an LLM with a structured prompt that includes:
+- Recent session context (turns, `last_query_state`)
+- Selected project memory snippets relevant to your query
+
+The LLM extracts these fields from your text:
+
+| Field | Description | Example |
+|---|---|---|
+| `event` | The event or action being measured | `app_launch`, `purchase` |
+| `metric` | The aggregation to apply | `pv` (page views), `uv` (unique users) |
+| `time_range` | The time window | `last_n_days: 7`, `yesterday` |
+| `region_filter` | Geographic scope | `DE`, `ROW`, `US` |
+| `group_by` | Dimensions to break down by | `country`, `channel` |
+| `filters` | Additional field-level filters | `platform=iOS` |
+
+The structured extraction result is passed to the next stage.
+
+<Note>
+  For follow-up queries, the LLM is prompted to extract only the fields you explicitly changed — it does not re-extract inherited fields. This keeps patch operations precise.
+</Note>
+
+## Stage 2: Matcher Resolution
+
+The matcher stage resolves each extracted term against your metadata catalog:
+
+- **Metric matcher** — maps terms like "page views" → `pv`
+- **Event matcher** — maps terms like "app launch" → `app_launch`
+- **Dimension matcher** — resolves `group_by` values
+- **Time matcher** — normalizes time expressions
+
+For each field, the matcher returns:
+- A resolved canonical value
+- A confidence score
+- A candidate list if multiple matches are plausible
+- A `needs_confirmation` flag if confidence is below threshold
+
+User preference is applied **after recall** as a weak rerank signal — it nudges candidate ranking but never overrides the semantic match.
+
+## Stage 3: Turn Logic
+
+Before building the DSL, the orchestrator classifies the current turn:
+
+| Turn type | What happens |
+|---|---|
+| `new_query` | Full NL2DSL path from scratch |
+| `followup_patch` | Extract only changed fields, merge into previous `QueryState` |
+| `confirmation` | Restore pending task, apply confirmed candidate, continue |
+
+See [Turn-Based Queries](/concepts/turn-based-queries) for details.
+
+## Stage 4: Semantic DSL
+
+The resolved fields are assembled into a `QueryState` — a structured, normalized representation of query intent:
+
+```json
+{
+  "event": "app_launch",
+  "metric": "pv",
+  "time_range": { "type": "last_n_days", "n": 7 },
+  "region_filter": ["DE"],
+  "group_by": ["country"]
+}
+```
+
+The Semantic DSL is returned in the `semantic` field of every response. It is human-readable and explains exactly what the agent understood from your query.
+
+## Stage 5: Exec DSL and Validation
+
+The Semantic DSL is rendered into an `exec_dsl` payload — the exact format your downstream query system expects. A validator then checks region and consistency constraints before the response is returned.
+
+If validation passes, the response carries `status=success`. If something required is missing (for example, the event could not be resolved), the response carries `status=early_exit` with an explanation.
+
+## Reading the explain field
+
+Every response includes an `explain` field with rich debug information:
+- Resolver explain (how each field was resolved and with what score)
+- Turn explain (why the turn was classified as new/patch/confirmation)
+- Candidate scores
+- Field sources (`explicit` vs. `inherited`)
+- Timing per stage
+
+Use this field to understand unexpected resolutions and to tune your catalog and project memory.

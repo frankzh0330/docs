@@ -1,0 +1,125 @@
+---
+title: "Send Your First Natural Language Query to Query Agent"
+sidebarTitle: "First Query"
+description: "Walk through sending your first natural language query to Query Agent's POST /nl2dsl endpoint and interpreting the structured DSL response."
+---
+
+This guide walks you through sending a natural language query to Query Agent and reading the response. You will see how the agent extracts intent, resolves catalog terms, and returns both a human-readable semantic DSL and an executable query payload.
+
+## What you need
+
+- A running Query Agent instance (see [Quick Start](/quickstart))
+- `curl` or any HTTP client
+
+## Send the query
+
+Send a POST request to `/nl2dsl` with your query text and a `project_id`:
+
+```bash
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Show PV for app_launch in Germany over the last 7 days",
+    "project_id": 55
+  }'
+```
+
+The `project_id` scopes the catalog metadata and project memory used for this query. The `text` field is your plain English question.
+
+## Read the response
+
+A successful response looks like this:
+
+```json
+{
+  "status": "success",
+  "session_id": "sess-abc-123",
+  "semantic": {
+    "event": "app_launch",
+    "metric": "pv",
+    "time_range": { "type": "last_n_days", "n": 7 },
+    "region_filter": ["DE"],
+    "group_by": []
+  },
+  "exec_dsl": {
+    "event": "app_launch",
+    "metric": "pv",
+    "date_range": { "days": 7 },
+    "filters": { "region": ["DE"] }
+  },
+  "explain": {
+    "turn_mode": "new_query",
+    "resolver_explain": {
+      "event": { "resolved": "app_launch", "score": 95.0, "source": "explicit" },
+      "metric": { "resolved": "pv", "score": 99.0, "source": "explicit" }
+    }
+  },
+  "extraction_json": { },
+  "task_id": null,
+  "candidates": null
+}
+```
+
+### Key response fields
+
+| Field | What it tells you |
+|---|---|
+| `status` | `success`, `early_exit`, or `needs_confirmation` |
+| `session_id` | Save this to send follow-up queries in the same session |
+| `semantic` | Normalized query intent — what the agent understood |
+| `exec_dsl` | Executable payload for your downstream query system |
+| `explain` | How each field was resolved and why |
+| `extraction_json` | Raw LLM extraction output before matcher resolution |
+| `candidates` | Set when `status=needs_confirmation` — candidates to show the user |
+| `task_id` | Set when `status=needs_confirmation` — the pending confirmation task ID |
+| `message` | Human-readable status message, most useful on non-success responses |
+
+## Handle non-success statuses
+
+<Accordion title="status=early_exit — a required field is missing">
+  The agent could not resolve one or more required fields (usually the event). Check the `message` field for details and ask the user to be more specific.
+
+  ```json
+  {
+    "status": "early_exit",
+    "message": "Could not resolve an event from the query text. Please specify the event name."
+  }
+  ```
+</Accordion>
+
+<Accordion title="status=needs_confirmation — ambiguous resolution">
+  The matcher found multiple plausible candidates with close scores. Display the `candidates` to the user and ask them to pick one. Then send their reply with the same `session_id` to complete the query. See [Multi-Turn Sessions](/guides/multi-turn-sessions) for how the confirmation reply works.
+
+  ```json
+  {
+    "status": "needs_confirmation",
+    "task_id": "task-xyz",
+    "candidates": {
+      "event": [
+        { "value": "app_launch", "score": 72.0 },
+        { "value": "app_cold_start_success", "score": 69.0 }
+      ]
+    }
+  }
+  ```
+</Accordion>
+
+<Note>
+  The `session_id` returned in the response is auto-generated when you omit it from the request. Always save it — you need it for every follow-up turn in the same conversation.
+</Note>
+
+## Next steps
+
+Now that your first query works, try sending a follow-up to refine the result without rewriting the full query:
+
+```bash
+curl -X POST http://localhost:8000/nl2dsl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Change it to UV",
+    "project_id": 55,
+    "session_id": "sess-abc-123"
+  }'
+```
+
+See [Multi-Turn Sessions](/guides/multi-turn-sessions) for a full walkthrough of follow-up queries, field patching, and confirmation flows.

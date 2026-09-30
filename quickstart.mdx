@@ -1,0 +1,115 @@
+---
+title: "Quick Start: Run Query Agent and Make Your First Query"
+sidebarTitle: "Quickstart"
+description: "Install Query Agent, configure your environment, start the server, and make your first natural language data query via the HTTP API."
+---
+
+This guide walks you through installing Query Agent, starting the server, and making your first `POST /nl2dsl` request. By the end you will have a running instance that converts plain-language questions into executable DSL.
+
+## Prerequisites
+
+- Python 3.11 or later
+- `pip`
+- Redis (only needed if you use `MESSAGE_BUS_BACKEND=redis`)
+
+<Steps>
+  <Step title="Clone and install dependencies">
+    Clone the repository and install Python dependencies:
+
+    ```bash
+    git clone https://github.com/frankzh0330/query-agent.git
+    cd query-agent
+    pip install -r requirements.txt
+    ```
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and edit it for your setup:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    At minimum, configure your LLM provider credentials and `CATALOG_API_BASE` (or use the bundled demo YAML catalog for local testing). See [Configuration](/configuration) for the full variable reference.
+  </Step>
+
+  <Step title="Start the server">
+    Run in direct mode (no Redis needed):
+
+    ```bash
+    python server.py
+    ```
+
+    The API is now listening on `http://localhost:8000`.
+
+    <Tip>Use `uvicorn server:app_with_ws --reload --port 8000` during development for hot-reload on file changes.</Tip>
+  </Step>
+
+  <Step title="Make your first query">
+    Send a natural language query to the `/nl2dsl` endpoint:
+
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Show PV for app_launch in Germany over the last 7 days",
+        "project_id": 55
+      }'
+    ```
+
+    A successful response looks like:
+
+    ```json
+    {
+      "status": "success",
+      "session_id": "abc-123",
+      "semantic": {
+        "event": "app_launch",
+        "metric": "pv",
+        "time_range": { "type": "last_n_days", "n": 7 },
+        "region_filter": ["DE"]
+      },
+      "exec_dsl": { ... },
+      "explain": { ... },
+      "extraction_json": { ... },
+      "task_id": null,
+      "candidates": null
+    }
+    ```
+
+    Save the `session_id` — you will use it to send follow-up queries that patch the current state instead of starting fresh.
+  </Step>
+
+  <Step title="Send a follow-up query">
+    Use the `session_id` from the previous response to refine your query:
+
+    ```bash
+    curl -X POST http://localhost:8000/nl2dsl \
+      -H "Content-Type: application/json" \
+      -d '{
+        "text": "Change it to UV",
+        "project_id": 55,
+        "session_id": "abc-123"
+      }'
+    ```
+
+    The agent detects this as a follow-up patch: it keeps `event=app_launch`, `region=DE`, and the time range, and only updates the metric to `uv`.
+  </Step>
+</Steps>
+
+## What's next
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Full reference for all environment variables and deployment modes.
+  </Card>
+  <Card title="Multi-Turn Sessions" icon="comments" href="/guides/multi-turn-sessions">
+    Learn how follow-up queries work and how to manage sessions.
+  </Card>
+  <Card title="POST /nl2dsl Reference" icon="code" href="/api/nl2dsl">
+    Complete request and response field documentation.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/nl2dsl-pipeline">
+    Understand the full NL2DSL pipeline under the hood.
+  </Card>
+</CardGroup>

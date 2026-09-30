@@ -1,0 +1,95 @@
+---
+title: "Memory Layers: How Query Agent Learns and Remembers"
+sidebarTitle: "Memory Layers"
+description: "Query Agent uses three memory layers — session, project, and user preference — each serving a different scope and lifetime to improve query accuracy."
+---
+
+Query Agent uses three distinct memory layers to improve resolution quality over time. Each layer has a different scope, lifetime, and trust level — mixing them would cause short-lived turn state to interfere with long-term project rules, or personal habits to pollute shared business logic.
+
+## Memory priority order
+
+```
+explicit user input
+  > session state
+  > project memory
+  > user preference rerank
+```
+
+Explicit input always wins. Session state fills omitted fields. Project memory constrains interpretation. User preference only nudges ranking at the end.
+
+## Layer 1: Session Memory
+
+Session memory stores the state of the current conversation:
+
+| What is stored | Purpose |
+|---|---|
+| `last_query_state` | Enable follow-up patching |
+| `pending_task_id` | Track unresolved confirmation tasks |
+| Recent turn messages | LLM context for extraction |
+| Turn type metadata | Explain follow-up classification |
+
+**Scope:** current session  
+**Lifetime:** short  
+**Trust level:** high  
+**Used at:** the start of every turn, before LLM extraction
+
+Session state is persisted as JSONL logs and survives process restarts. See [Turn-Based Queries](/concepts/turn-based-queries) for how session memory powers follow-up patching.
+
+## Layer 2: Project Memory
+
+Project memory stores project-specific business knowledge that applies to everyone querying that project:
+
+- Default event mappings (e.g., "activation" → `activation_success` in project 55)
+- Business constraints (e.g., exclude internal traffic by default)
+- Domain corrections and caveats
+- Dimension and property mapping rules
+
+Project memory is stored in `data/memory/project_{id}/MEMORY.md` files. Before each LLM extraction, the system selects the memory snippets most relevant to the current query text and injects them into the prompt.
+
+**Scope:** project (`project_id`)  
+**Lifetime:** long  
+**Trust level:** high  
+**Used at:** prompt injection before LLM extraction
+
+<Tip>
+  Project memory can also grow automatically. When a query succeeds, Query Agent's async memory writer may append learned corrections, mappings, or constraints to the project's MEMORY.md file.
+</Tip>
+
+## Layer 3: User Preference Signal
+
+User preference tracks per-user usage patterns:
+
+- Frequently used events
+- Frequently used metrics
+- Frequently used `group_by` dimensions
+
+This signal is scoped to `project_id + user_id`, so one user's habits do not affect another's results.
+
+**Scope:** project + user  
+**Lifetime:** medium to long  
+**Trust level:** medium  
+**Used at:** post-recall rerank bias only
+
+<Warning>
+  User preference is intentionally a **weak signal**. The matcher still performs primary semantic recall. Preference only biases the final ranking of top candidates — it never replaces or overrides the matcher's resolution.
+</Warning>
+
+Example of what user preference does and does not do:
+
+```
+User history: often checks payment_success
+Current query: Show registration completion
+
+✅ Preference nudges payment_success if it appears in recall candidates
+❌ Preference does NOT force payment_success when "registration" is mentioned
+```
+
+## Async memory learning
+
+When a query succeeds, Query Agent can asynchronously judge whether it contains reusable knowledge and write it back to the appropriate memory file. This is:
+
+- **Non-blocking** — it does not slow down the main response
+- **Failure-tolerant** — a write failure does not affect your query result
+- **Scoped** — corrections are written to the relevant project's memory file
+
+Over time, this allows Query Agent to accumulate project-specific knowledge without manual memory management.
